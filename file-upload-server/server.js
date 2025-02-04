@@ -45,6 +45,53 @@ app.post('/upload', upload.single('chunk'), (req, res) => {
   });
 });
 
+// 添加合并文件的接口
+app.post('/merge', async (req, res) => {
+  const { filename, totalChunks } = req.body;
+  
+  try {
+    // 创建写入流，写入最终文件
+    const writeStream = fs.createWriteStream(path.join(uploadsDir, filename));
+    
+    // 按顺序合并分片
+    for (let i = 0; i < totalChunks; i++) {
+      const chunkPath = path.join(chunksDir, `${filename}-${i}`);
+      // 判断分片是否存在
+      if (!fs.existsSync(chunkPath)) {
+        return res.status(400).json({
+          success: false,
+          message: `分片 ${i} 不存在`
+        });
+      }
+      
+      // 读取分片并写入
+      const chunkBuffer = await fs.promises.readFile(chunkPath);
+      writeStream.write(chunkBuffer);
+      
+      // 删除分片文件
+      await fs.promises.unlink(chunkPath);
+    }
+    
+    // 完成写入
+    writeStream.end();
+    
+    console.log(`文件 ${filename} 合并完成`);
+    res.json({
+      success: true,
+      message: '文件合并成功',
+      path: path.join(uploadsDir, filename)
+    });
+    
+  } catch (error) {
+    console.error('合并文件失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '文件合并失败',
+      error: error.message
+    });
+  }
+});
+
 const PORT = 3000;
 
 app.listen(PORT, () => {
