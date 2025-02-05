@@ -38,30 +38,56 @@ const createFileChunk = (file, size = CHUNK_SIZE) => {
   const chunks = []
   let cur = 0
   while (cur < file.size) {
-    chunks.push(file.slice(cur, cur + size))
+    chunks.push({
+      index: Math.floor(cur / size),
+      data: file.slice(cur, cur + size)
+    })
     cur += size
   }
   return chunks
 }
 
-const uploadChunk = async (chunk, index) => {
+const uploadChunk = async (chunk, filename) => {
   const formData = new FormData()
-  formData.append('chunk', chunk)
-  formData.append('index', index)
-  formData.append('filename', selectedFile.value.name)
+  
+  // 确保先添加其他字段，再添加文件
+  formData.append('index', chunk.index.toString())
+  formData.append('filename', filename)
+  
+  // 创建文件对象，使用带索引的名称
+  const chunkFile = new File(
+    [chunk.data], 
+    `${filename}-${chunk.index}`, 
+    { type: 'application/octet-stream' }
+  )
+  formData.append('chunk', chunkFile)
 
   try {
+    console.log(`开始上传分片 ${chunk.index}`, {
+      filename,
+      index: chunk.index,
+      size: chunk.data.size
+    })
+
     const response = await fetch('http://localhost:3000/upload', {
       method: 'POST',
       body: formData
     })
+    
+    if (!response.ok) {
+      const errorData = await response.json()
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`)
+    }
+    
     const result = await response.json()
     if (!result.success) {
       throw new Error(result.message)
     }
+    
+    console.log(`分片 ${chunk.index} 上传成功`)
     return result
   } catch (error) {
-    console.error('上传分片失败:', error)
+    console.error(`分片 ${chunk.index} 上传失败:`, error)
     throw error
   }
 }
@@ -78,6 +104,9 @@ const mergeFile = async (filename, totalChunks) => {
         totalChunks
       })
     })
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`)
+    }
     const result = await response.json()
     if (!result.success) {
       throw new Error(result.message)
@@ -98,11 +127,12 @@ const handleUpload = async () => {
   try {
     const chunks = createFileChunk(selectedFile.value)
     const totalChunks = chunks.length
+    console.log(`文件将被分成 ${totalChunks} 个分片上传`)
     
     // 上传所有分片
     for (let i = 0; i < chunks.length; i++) {
-      await uploadChunk(chunks[i], i)
-      uploadProgress.value = Math.round(((i + 1) / totalChunks) * 90) // 预留10%给合并进度
+      await uploadChunk(chunks[i], selectedFile.value.name)
+      uploadProgress.value = Math.round(((i + 1) / totalChunks) * 90)
     }
     
     // 请求合并文件

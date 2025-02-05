@@ -28,54 +28,96 @@ const storage = multer.diskStorage({
     cb(null, chunksDir);
   },
   filename: function (req, file, cb) {
-    // 使用文件名-分片索引作为分片文件名
-    const filename = `${req.body.filename}-${req.body.index}`;
-    cb(null, filename);
+    // multer 会在其他字段之前处理文件，所以我们从 file.originalname 中获取信息
+    console.log('Upload request body:', req.body); // 添加调试日志
+    console.log('File info:', file); // 添加调试日志
+    
+    // 直接使用请求体中的数据
+    const chunkIndex = req.body.index;
+    const originalFilename = req.body.filename;
+    const chunkFilename = `${originalFilename}-${chunkIndex}`;
+    
+    console.log('Saving chunk:', chunkFilename); // 添加调试日志
+    cb(null, chunkFilename);
   }
 });
 
 const upload = multer({ storage });
 
 // 处理分片上传
-app.post('/upload', upload.single('chunk'), (req, res) => {
-  console.log(`接收到分片 ${req.body.index}`);
-  res.json({
-    success: true,
-    message: `分片 ${req.body.index} 上传成功`
+app.post('/upload', (req, res, next) => {
+  console.log('Received upload request'); // 添加调试日志
+  
+  upload.single('chunk')(req, res, (err) => {
+    if (err) {
+      console.error('Multer error:', err); // 添加调试日志
+      return res.status(400).json({
+        success: false,
+        message: '文件上传失败',
+        error: err.message
+      });
+    }
+
+    const { filename, index } = req.body;
+    const chunkPath = path.join(chunksDir, `${filename}-${index}`);
+    
+    console.log('Upload completed, checking file:', chunkPath); // 添加调试日志
+    
+    if (fs.existsSync(chunkPath)) {
+      console.log(`分片 ${index} 上传成功，保存在: ${chunkPath}`);
+      res.json({
+        success: true,
+        message: `分片 ${index} 上传成功`
+      });
+    } else {
+      console.error(`分片 ${index} 保存失败`);
+      res.status(400).json({
+        success: false,
+        message: `分片 ${index} 保存失败`
+      });
+    }
   });
 });
 
-// 添加合并文件的接口
+// 合并文件
 app.post('/merge', async (req, res) => {
   const { filename, totalChunks } = req.body;
   
+  console.log('开始合并文件:', filename);
+  console.log('总分片数:', totalChunks);
+  
   try {
-    // 创建写入流，写入最终文件
+    // 检查所有分片是否存在
+    for (let i = 0; i < totalChunks; i++) {
+      const chunkPath = path.join(chunksDir, `${filename}-${i}`);
+      if (!fs.existsSync(chunkPath)) {
+        console.error(`分片 ${i} 不存在，路径: ${chunkPath}`);
+        return res.status(400).json({
+          success: false,
+          message: `分片 ${i} 不存在`
+        });
+      } else {
+        console.log(`找到分片 ${i}: ${chunkPath}`);
+      }
+    }
+    
+    // 创建写入流
     const writeStream = fs.createWriteStream(path.join(uploadsDir, filename));
     
     // 按顺序合并分片
     for (let i = 0; i < totalChunks; i++) {
       const chunkPath = path.join(chunksDir, `${filename}-${i}`);
-      // 判断分片是否存在
-      if (!fs.existsSync(chunkPath)) {
-        return res.status(400).json({
-          success: false,
-          message: `分片 ${i} 不存在`
-        });
-      }
-      
-      // 读取分片并写入
       const chunkBuffer = await fs.promises.readFile(chunkPath);
       writeStream.write(chunkBuffer);
       
       // 删除分片文件
       await fs.promises.unlink(chunkPath);
+      console.log(`分片 ${i} 已合并并删除`);
     }
     
-    // 完成写入
     writeStream.end();
+    console.log('文件合并完成');
     
-    console.log(`文件 ${filename} 合并完成`);
     res.json({
       success: true,
       message: '文件合并成功',
